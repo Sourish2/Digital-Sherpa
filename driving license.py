@@ -178,4 +178,4 @@ def extract_driver_details(image_path):
 
 
 
-print(extract_driver_details("Screenshot 2025-06-05 134455.png"))
+print(extract_driver_details("C:/Users/souri/PycharmProjects/intern/Screenshot 2025-06-05 110529.png"))
