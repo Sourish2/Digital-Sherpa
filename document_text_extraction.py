@@ -121,7 +121,6 @@ def extract_pan_details(image_path):
     image = preprocess_image_resize(image_path, (512, 512))
     result = ocr.ocr(image, cls=True)[0]
     lines = [line[1][0].strip() for line in result if line[1][0].strip() and not is_blacklisted(line[1][0])]
-    print(lines)
     full_text = ' '.join(lines).upper()
     pan = re.search(r'\b[A-Z]{5}[0-9]{4}[A-Z]\b', full_text)
     dob = re.search(DOB_PATTERN, full_text)
@@ -202,7 +201,7 @@ def extract_aadhar_details(image_path):
     address = ", ".join(address_lines) if address_lines else None
     if address == None:
         for i, line in enumerate(texts):
-            if "S/O" in line.upper() and len(line.split()) > 1:
+            if "S/O" in line.upper() and len(line.replace(":"," ").split()) > 1:
                 # ✅ Include current line first
                 candidate = line
                 if not re.search(r'\d{2}[-/.]\d{2}[-/.]\d{4}', candidate) and \
@@ -485,5 +484,3 @@ async def extract_kyc_document_data(image: UploadFile, document_name: str):
         return extract_voter_details(tmp_path)
     else:
         return {"error": f"Unsupported document type: {document_name}"}
-
-print(extract_pan_details("C:/Users/souri/PycharmProjects/intern/WhatsApp Image 2025-06-10 at 13.09.21_44bc07fe.jpg"))
