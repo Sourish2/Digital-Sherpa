@@ -18,6 +18,13 @@ BLACKLIST_KEYWORDS = [
     "SIGNATURE", "YOUR SIGNATURE HERE"
 ]
 
+keys = [
+    "DP Id", "Client Id", "Sex", "DP Int Ref No", "A/c Status", "A/c Opening Dt", "Purchase Waiver", "BO Status", "BO Sub Status", "A/c Category", "Freeze Status", "Registered For Easi",
+    "Nationality", "Stmt Cycle", "Occupation", "Closure Init By", "Account Closure Dt", "Registered For Easi ",
+    "Registered For Easiest", "SMS Registered", "SMS Mobile No", "UID", "RBI Ref No", "RBI Approval Dt",
+    "Mode Of Operation", "BSDA Flag", "RGESS Flag", "Pledge SI Flag", "Email D/L Flag", "Annual Report Flag","First Holder Name","Second Holder Name","Third Holder Name","First Holder PAN","Second Holder PAN","Third Holder PAN"
+]
+
 DOB_BLACKLIST_CONTEXT = ["Issue Date", "DATE", "date", "Date", "DATE OF ISSUE"]
 IFSC_PATTERN = r'[A-Z10]{4}[0O][A-Z0-9]{4,6}'
 ACC_PATTERN = r'\d{11,18}\b'
@@ -90,6 +97,13 @@ def parse_table(table, keys):
                 result[key] = value
     return result
 
+def count_account_holders(cml_extract):
+    count=0
+    for i in cml_extract.keys():
+        if "Holder Name" in i:
+            if not cml_extract[i]=="":
+                count++
+    return count
 def preprocess_image_resize(image_path, target_size):
     image = cv2.imread(image_path)
     if image is None:

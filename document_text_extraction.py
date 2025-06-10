@@ -18,7 +18,7 @@ BLACKLIST_KEYWORDS = [
     "SIGNATURE", "YOUR SIGNATURE HERE"
 ]
 
-DOB_BLACKLIST_CONTEXT = ["Issue Date", "DATE", "date", "Date", "DATE OF ISSUE","Address","S/O","Father"]
+DOB_BLACKLIST_CONTEXT = ["Issue Date", "DATE", "date", "Date", "DATE OF ISSUE", "Address", "S/O", "Father"]
 IFSC_PATTERN = r'[A-Z10]{4}[0O][A-Z0-9]{4,6}'
 ACC_PATTERN = r'\d{11,18}\b'
 PIN_PATTERN = r'(?<=[A-Z\-])\s*\d{3}\s*\d{3}(?=[A-Z ,\.]|$)'
@@ -155,8 +155,21 @@ def extract_pan_details(image_path):
 def extract_aadhar_details(image_path):
     image = preprocess_image(image_path)
     result = ocr.ocr(image, cls=True)[0]
-    texts = [line[1][0] for line in result]
-    print(texts)
+
+    horizontal_texts = []
+    for line in result:
+        box = line[0]
+        x_coords = [pt[0] for pt in box]
+        y_coords = [pt[1] for pt in box]
+
+        width = max(x_coords) - min(x_coords)
+        height = max(y_coords) - min(y_coords)
+
+        if width > height:  # width-dominant => horizontal
+            horizontal_texts.append(line[1][0])
+
+    print(horizontal_texts)
+    texts = horizontal_texts#[line[1][0] for line in result]
     full_text = " ".join(texts)
 
     name, dob, aadhar_number, gender, address = None, None, None, None, None
@@ -176,7 +189,7 @@ def extract_aadhar_details(image_path):
                 if i > 0:
                     name = texts[i - 1].strip().replace("Name", '').replace(':', '')
                     j = i - 1
-                    while((any(bad in name for bad in DOB_BLACKLIST_CONTEXT) or len(name)<=3) and j > 0):
+                    while(j > 0 and (any(bad in name.upper() for bad in DOB_BLACKLIST_CONTEXT) or len(name) <= 3 or contains_digit(name))):
                         j -= 1
                         name = texts[j].strip().replace("Name", '').replace(':', '')
                 break
@@ -201,7 +214,7 @@ def extract_aadhar_details(image_path):
     address = ", ".join(address_lines) if address_lines else None
     if address == None:
         for i, line in enumerate(texts):
-            if "S/O" in line.upper() and len(line.replace(":"," ").split()) > 1:
+            if ("S/O" in line.upper() or "W/O" in line.upper()) and len(line.replace(":"," ").split()) > 1:
                 # ✅ Include current line first
                 candidate = line
                 if not re.search(r'\d{2}[-/.]\d{2}[-/.]\d{4}', candidate) and \
@@ -484,3 +497,5 @@ async def extract_kyc_document_data(image: UploadFile, document_name: str):
         return extract_voter_details(tmp_path)
     else:
         return {"error": f"Unsupported document type: {document_name}"}
+
+print(extract_aadhar_details("C:/Users/souri/PycharmProjects/intern/Screenshot 2025-06-10 142719.png"))
