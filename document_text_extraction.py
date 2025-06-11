@@ -168,7 +168,6 @@ def extract_aadhar_details(image_path):
         if width > height:  # width-dominant => horizontal
             horizontal_texts.append(line[1][0])
 
-    print(horizontal_texts)
     texts = horizontal_texts#[line[1][0] for line in result]
     full_text = " ".join(texts)
 
