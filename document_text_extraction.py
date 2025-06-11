@@ -495,7 +495,7 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
         "Country Code": extract_by_keyword(result, "Country Code") or "",
         "Passport Number": passport_no or "",
         "Sex": extract_by_keyword(result, "Sex") or "",
-        "Nationality": extract_by_keyword(result, "Nation") or "",
+        "Nationality":  (extract_by_keyword(result, "Nation") or "").split("/")[-1].strip(),
         "Date of Birth": get_item(dates, 0),
         "Date of Issue": get_item(dates, 1),
         "Date of Expiry": get_item(dates, 2) or extract_by_keyword(result, "Date of Exp") or "",
