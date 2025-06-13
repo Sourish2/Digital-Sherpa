@@ -1,8 +1,53 @@
 import cv2
 from paddleocr import PaddleOCR
 import re
-from typing import List, Optional, Dict
+from typing import List,Tuple, Optional, Dict
 import numpy as np
+import google.generativeai as genai
+import re
+import json
+from PIL import Image
+from passportgemini import api_key
+
+def gemini_fallback(image_path):
+    genai.configure(api_key=api_key)
+    # Load the image (your passport scan)
+    image = Image.open("WhatsApp Image 2025-06-12 at 10.55.29_7a30f009.jpg")
+    # Create a Gemini multimodal model
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    # Send image with prompt
+    response = model.generate_content(
+        ["""
+        Extract the following fields from this passport image and return them in a JSON dictionary format:
+
+        {
+          "Type": "",
+          "Country Code": "",
+          "Passport No.": "",
+          "Sex": "",
+          "Nationality": "",
+          "Date of Birth": "",
+          "Date of Issue": "",
+          "Date of Expiry": "",
+          "Place of Birth": "",
+          "Place of Issue": "",
+          "Given Name(s)": "",
+          "Address" : ""
+        }
+
+        Only return the dictionary without explanation.
+        """, image],
+        generation_config={"temperature": 0.2}
+    )
+
+    # Print raw text output
+    match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
+
+    if match:
+        json_str = match.group(1)
+        data = json.loads(json_str)
+    return data
+
 
 # Initialize OCR engine
 ocr = PaddleOCR(use_angle_cls=True, lang='en')
@@ -16,6 +61,8 @@ def filter_caps_and_dates(strings: List[str]) -> List[str]:
     filtered = []
     for s in strings:
         if s.isupper():
+            filtered.append(s)
+        elif s in ['p','s','o','d']:
             filtered.append(s)
         elif date_pattern.fullmatch(s):
             filtered.append(s)
@@ -31,15 +78,38 @@ def display_image(image, window_name="Image"):
     cv2.imshow(window_name, image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+def resize_by_width(image, width=1024):
+    h, w = image.shape[:2]
+    aspect_ratio = h / w
+    new_height = int(width * aspect_ratio)
+    return cv2.resize(image, (width, new_height))
 
-
-def preprocess_image(image_path: str, target_size) -> np.ndarray:
-    """Loads and preprocesses the passport image."""
+def preprocess_image(image_path: str, target_size=None) -> np.ndarray:
+    """Loads and preprocesses the passport image.
+    If the top 25% of the image has very little text, cuts the image in half vertically.
+    """
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Image at path '{image_path}' could not be loaded.")
-    image = cv2.resize(image, target_size)
-    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    h, w = image.shape[:2]
+    top_quarter = image[0:int(h * 0.25), :]
+
+    # Run OCR on top 25% only
+    result = ocr.ocr(top_quarter, cls=True)[0]
+
+    # Filter out noise/false positives with confidence threshold
+    high_conf_texts = [line for line in result if line[1][1] > 0.5]
+    Flag=1
+
+    # If very few (e.g., ≤ 2) confident detections, assume it's mostly blank
+    if len(high_conf_texts) <= 2:
+        print("Top of image is mostly empty — cropping image in half.")
+        image = image[int(h * 0.5):, :]
+        image=resize_by_width(image)
+        Flag=0
+
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY),Flag
 def extract_by_keyword(result, keyword: str, y_tolerance: int = 40, x_tolerance: int = 80) -> Optional[str]:
     """
     Search for a keyword and extract the first text box directly underneath it
@@ -75,6 +145,7 @@ def extract_by_keyword(result, keyword: str, y_tolerance: int = 40, x_tolerance:
 def extract_multiple_by_prefix(
     result,
     keyword_prefix: str,
+    date=False,
     y_tolerance: int = 40,
     x_tolerance: int = 80
 ) -> List[str]:
@@ -111,32 +182,22 @@ def extract_multiple_by_prefix(
                 if 0 < (oy_center - keyword_y) < y_tolerance and abs(ox_center - keyword_x) < x_tolerance:
                     extracted_values.append(value_text)
                     break  # Stop at first value under each keyword label
+    if(len(extracted_values)<3 and date):
+        extracted_values=[]
     return extracted_values
-def extract_passport_details(image_path: str) -> Dict[str, str]:
-    """Extracts key passport details from the given image path."""
 
-    def get_next_valid_date(data: List[str], start_index: int) -> Optional[int]:
-        """Finds the next index of a valid date starting from `start_index`."""
-        for idx in range(start_index, len(data)):
-            if date_pattern.fullmatch(data[idx]):
-                return idx
-        return None
-    #Patterns
-    passport_no_pattern = r'[A-PR-WY][0-9]{7}'
+def extract_front_page(raw_texts,result):
+    passport_no_pattern = r'[A-PR-WX-Z][0-9]{7}'
     date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/\d{4}\b')
 
-    # OCR and preprocessing
-    img = preprocess_image(image_path,(512,512))
-    result = ocr.ocr(img, cls=True)[0]
-    raw_texts = [line[1][0] for line in result]
     filtered_data = filter_caps_and_dates(raw_texts)
 
-    passport_no=re.search(passport_no_pattern," ".join(raw_texts))
+    passport_no = re.search(passport_no_pattern, " ".join(raw_texts))
     if passport_no:
-        passport_no=passport_no.group()
+        passport_no = passport_no.group()
     # Initialize fields
     # Get multi-field values once
-    dates = extract_multiple_by_prefix(result, "Date of")
+    dates = extract_multiple_by_prefix(result, "Date of", True)
     places = extract_multiple_by_prefix(result, "Place of")
 
     # Use safe access with default values ("" if missing)
@@ -146,53 +207,52 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
     details = {
         "Type": extract_by_keyword(result, "Type") or "",
         "Country Code": extract_by_keyword(result, "Country Code") or "",
-        "Passport Number": passport_no or "",
+        "Passport No.": passport_no or "",
         "Sex": extract_by_keyword(result, "Sex") or "",
-        "Nationality": extract_by_keyword(result, "Nation") or "",
+        "Nationality": extract_by_keyword(result, "nat") or "",
         "Date of Birth": get_item(dates, 0),
         "Date of Issue": get_item(dates, 1),
         "Date of Expiry": get_item(dates, 2) or extract_by_keyword(result, "Date of Exp") or "",
         "Place of Birth": get_item(places, 0),
         "Place of Issue": get_item(places, 1),
-        "Name": extract_by_keyword(result, "Name") or ""
+        "Given Name(s)": extract_by_keyword(result, "Gi", 60) or "",
     }
-     # Extract 'Type'
+    # Extract 'Type'
     for i, line in enumerate(filtered_data):
-        if len(line) == 1 and line not in ['M', 'F']:
-            if details["Type"] == "":
-               details["Type"] = line
-            i=i+1
+        if len(line) == 1 and line.lower() in ['p', 's', 'o', 'd']:
+            if details["Type"] == "" or len(details["Type"]) > 1:
+                details["Type"] = line
+            i = i + 1
             break
 
     # Country Code
     if i < len(filtered_data) and len(filtered_data[i]) == 3:
-        if(details["Country Code"]==""):
+        if (details["Country Code"] == ""):
             details["Country Code"] = filtered_data[i]
         i += 1
-    #Gender
+    # Gender
     for i in filtered_data:
-        if details["Sex"]=="":
-            if i=="M":
-                details["Sex"]="M"
-            elif i=="F":
-                details["Sex"]="F"
-    #Dates
-    dates=[]
-    date_index=[]
-    print(filtered_data)
-    for i,line in enumerate(filtered_data):
-        if re.fullmatch(date_pattern,line):
+        if details["Sex"] == "":
+            if i == "M":
+                details["Sex"] = "M"
+            elif i == "F":
+                details["Sex"] = "F"
+    # Dates
+    dates = []
+    date_index = []
+    for i, line in enumerate(filtered_data):
+        if re.fullmatch(date_pattern, line):
             dates.append(line)
             date_index.append(i)
-    if(details["Date of Birth"]==""):
-        details["Date of Birth"]=get_item(dates,0)
+    if (details["Date of Birth"] == ""):
+        details["Date of Birth"] = get_item(dates, 0)
     if (details["Date of Issue"] == ""):
         details["Date of Issue"] = get_item(dates, 1)
     if (details["Date of Expiry"] == ""):
         details["Date of Expiry"] = get_item(dates, 2)
-    if(len(date_index)==3 and date_index[1]-date_index[0]==4):
+    if (len(date_index) == 3 and date_index[1] - date_index[0] == 4):
         if (details["Place of Birth"] == ""):
-            details["Place of Birth"]=filtered_data[date_index[0]+2]
+            details["Place of Birth"] = filtered_data[date_index[0] + 2]
         if (details["Place of Issue"] == ""):
             details["Place of Issue"] = filtered_data[date_index[0] + 3]
     if (len(date_index) == 3 and date_index[1] - date_index[0] == 3):
@@ -200,45 +260,82 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
             details["Place of Birth"] = filtered_data[date_index[0] + 1]
         if (details["Place of Issue"] == ""):
             details["Place of Issue"] = filtered_data[date_index[0] + 2]
-
     return details
 
-    # # Passport Number
-    # if i < len(filtered_data) and re.fullmatch(passport_no_pattern, filtered_data[i]):
-    #     details["Passport Number"] = filtered_data[i]
-    #     i += 1
-    #
-    # # Full Name, Nationality, Gender
-    # name_parts = []
-    # while i < len(filtered_data) and filtered_data[i] not in ['M', 'F']:
-    #     name_parts.append(filtered_data[i])
-    #     i += 1
-    #
-    # if i < len(filtered_data):
-    #     details["Sex"] = filtered_data[i]
-    #     details["Nationality"] = name_parts.pop() if name_parts else ""
-    #     details["Full Name"] = ' '.join(name_parts)
-    #     i += 1
-    #
-    # # Date of Birth
-    # if i < len(filtered_data) and date_pattern.fullmatch(filtered_data[i]):
-    #     details["Date of Birth"] = filtered_data[i]
-    #     i += 1
-    #
-    #     # Look for Date of Issue and Date of Expiry
-    #     doi_index = get_next_valid_date(filtered_data, i)
-    #     if doi_index is not None:
-    #         details["Date of Issue"] = filtered_data[doi_index]
-    #
-    #         doe_index = get_next_valid_date(filtered_data, doi_index + 1)
-    #         if doe_index is not None:
-    #             details["Date of Expiry"] = filtered_data[doe_index]
-    #
-    #         # Guess Place of Birth and Place of Issue based on gaps
-    #         if doi_index - i == 2:
-    #             details["Place of Birth"] = filtered_data[i]
-    #             details["Place of Issue"] = filtered_data[i + 1]
-    # return details
+def extract_back_page(raw_data,result):
+    address=""
+    details={"Address": ""}
+    for i, line in enumerate(raw_data):
+        if "ress" in line:
+            address=" ".join([raw_data[i+1],raw_data[i+2],raw_data[i+3]])
+    details["Address"]=address
+    return details
 
 
-print(extract_passport_details("C:/Users/souri/PycharmProjects/intern/Screenshot 2025-06-03 165441.png"))
+def extract_passport_details(image_path: str) -> Dict[str, str]:
+    """Extracts key passport details from the given image path."""
+
+    def get_next_valid_date(data: List[str], start_index: int) -> Optional[int]:
+        """Finds the next index of a valid date starting from `start_index`."""
+        for idx in range(start_index, len(data)):
+            if date_pattern.fullmatch(data[idx]):
+                return idx
+        return None
+
+    details={"Type": "",
+          "Country Code": "",
+          "Passport No.": "",
+          "Sex": "",
+          "Nationality": "",
+          "Date of Birth": "",
+          "Date of Issue": "",
+          "Date of Expiry": "",
+          "Place of Birth": "",
+          "Place of Issue": "",
+          "Given Name(s)": "",
+          "Address" : ""}
+    #Patterns
+    passport_no_pattern = r'[A-PR-WX-Z][0-9]{7}'
+    date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/\d{4}\b')
+
+    # OCR and preprocessing
+    flag=1
+    image,Flag = preprocess_image(image_path)
+    if(Flag==1):
+        image=cv2.resize(image,(512,512))
+    result = ocr.ocr(image, cls=True)[0]
+    raw_texts = [line[1][0] for line in result]
+    keywords=["REPUBLIC", "EMIGRATION"]
+    full_text=" ".join(raw_texts)
+    details={}
+    if all(keyword in full_text for keyword in keywords):
+        print("Keywords detected — slicing image vertically in half.")
+
+        # Get image dimensions
+        h, w = image.shape[:2]
+        mid = w // 2
+
+        # Slice vertically
+        left_half = image[:, :mid]
+        right_half = image[:, mid:]
+
+        # Resize both
+        left_half = cv2.resize(left_half, (1024,1024))
+        right_half = cv2.resize(right_half, (512,512))
+        result = ocr.ocr(left_half, cls=True)[0]
+        raw_texts = [line[1][0] for line in result]
+        details = extract_front_page(raw_texts, result)
+        result = ocr.ocr(right_half, cls=True)[0]
+        raw_texts = [line[1][0] for line in result]
+        details.update(extract_back_page(raw_texts,result))
+        flag=0
+        for i in details.keys():
+            if details[i]=="":
+                details=gemini_fallback(image_path)
+    if("REPUBLIC" in full_text and flag==1):
+        details=extract_front_page(raw_texts,result)
+    if("EMIGRATION" in full_text and flag==1):
+        details.update(extract_back_page(raw_texts,result))
+    return detailss
+
+print(extract_passport_details("WhatsApp Image 2025-06-12 at 10.55.29_7a30f009.jpg"))
