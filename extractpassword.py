@@ -84,7 +84,7 @@ def resize_by_width(image, width=1024):
     new_height = int(width * aspect_ratio)
     return cv2.resize(image, (width, new_height))
 
-def preprocess_image(image_path: str, target_size=None) -> np.ndarray:
+def preprocess_passport_image(image_path: str, target_size=None) -> np.ndarray:
     """Loads and preprocesses the passport image.
     If the top 25% of the image has very little text, cuts the image in half vertically.
     """
@@ -266,8 +266,9 @@ def extract_back_page(raw_data,result):
     address=""
     details={"Address": ""}
     for i, line in enumerate(raw_data):
-        if "ress" in line:
-            address=" ".join([raw_data[i+1],raw_data[i+2],raw_data[i+3]])
+        if "," in line or len(line.split())>3:
+            address=" ".join([raw_data[i],raw_data[i+1],raw_data[i+2]])
+            break
     details["Address"]=address
     return details
 
@@ -327,15 +328,17 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
         details = extract_front_page(raw_texts, result)
         result = ocr.ocr(right_half, cls=True)[0]
         raw_texts = [line[1][0] for line in result]
+        raw_texts=filter_caps_and_dates(raw_texts)
         details.update(extract_back_page(raw_texts,result))
         flag=0
-        for i in details.keys():
-            if details[i]=="":
-                details=gemini_fallback(image_path)
+        # for i in details.keys():
+        #     if details[i]=="":
+        #         details=gemini_fallback(image_path)
     if("REPUBLIC" in full_text and flag==1):
         details=extract_front_page(raw_texts,result)
     if("EMIGRATION" in full_text and flag==1):
+        raw_texts=filter_caps_and_dates(raw_texts)
         details.update(extract_back_page(raw_texts,result))
-    return detailss
+    return details
 
-print(extract_passport_details("WhatsApp Image 2025-06-12 at 10.55.29_7a30f009.jpg"))
+print(extract_passport_details("Screenshot 2025-06-13 103636.png"))
