@@ -150,6 +150,83 @@ def extract_multiple_by_prefix(
                     extracted_values.append(value_text)
                     break  # Stop at first value under each keyword label
     return extracted_values
+def extract_date_near_keywords(
+    ocr_result,
+    keywords,
+    exclude_if_contains=None,
+    max_vertical_gap=50,
+    max_horizontal_gap=150
+):
+    DOB_PATTERN = r'(?:\d{2}[-/.](?:\d{2}|\w{3})[-/.]\d{2,4})'
+    exclude_if_contains = exclude_if_contains or []
+    matched_date = None
+
+    for i, (box, (text, conf)) in enumerate(ocr_result):
+        upper_text = text.upper()
+
+        if any(ex.upper() in upper_text for ex in exclude_if_contains):
+            continue
+
+        if any(keyword.upper() in upper_text for keyword in keywords):
+            date_match = re.search(DOB_PATTERN, upper_text)
+            if date_match:
+                return date_match.group()
+
+            if i + 1 < len(ocr_result):
+                next_box, (next_text, _) = ocr_result[i + 1]
+                next_upper = next_text.upper()
+                current_box_y_center = sum(pt[1] for pt in box) / 4
+                next_box_y_center = sum(pt[1] for pt in next_box) / 4
+                if abs(next_box_y_center - current_box_y_center) <= 20:
+                    if not any(ex.upper() in next_upper for ex in exclude_if_contains):
+                        next_date_match = re.search(DOB_PATTERN, next_upper)
+                        if next_date_match:
+                            return next_date_match.group()
+
+            keyword_bottom_y = max(pt[1] for pt in box)
+            keyword_center_x = sum(pt[0] for pt in box) / 4
+            closest_y_diff = float('inf')
+
+            for other_box, (other_text, _) in ocr_result:
+                other_upper = other_text.upper()
+
+                if any(ex.upper() in other_upper for ex in exclude_if_contains):
+                    continue
+
+                other_top_y = min(pt[1] for pt in other_box)
+                other_center_x = sum(pt[0] for pt in other_box) / 4
+                y_diff = other_top_y - keyword_bottom_y
+
+                if 0 < y_diff < max_vertical_gap and abs(other_center_x - keyword_center_x) < max_horizontal_gap:
+                    other_date = re.search(DOB_PATTERN, other_upper)
+                    if other_date and y_diff < closest_y_diff:
+                        matched_date = other_date.group()
+                        closest_y_diff = y_diff
+
+            if matched_date:
+                return matched_date
+
+    return None
+
+
+def extract_account_number(lines):
+    STATE_CODES = [
+        'AN', 'AP', 'AR', 'AS', 'BR', 'CH', 'CG', 'DD', 'DL', 'DN', 'GA', 'GJ', 'HP',
+        'HR', 'JH', 'JK', 'KA', 'KL', 'LA', 'LD', 'MH', 'ML', 'MN', 'MP', 'MZ',
+        'NL', 'OD', 'PB', 'PY', 'RJ', 'SK', 'TN', 'TR', 'TS', 'UK', 'UP', 'WB'
+    ]
+    for line in lines:
+        upper_line = line.upper().replace(" ", "").replace("-", "")
+        for code in STATE_CODES:
+            if upper_line.startswith("DLNO" + code) or upper_line.startswith(code):
+                # Extract using regex to avoid false positives
+                match = re.search(r'([A-Z]{2}-?\d{4}-?\d{7,})', line)
+                if match:
+                    return match.group().replace(" ", "").strip()
+                return line.replace("DLNo", "").replace("DL NO", "").replace(":", "").strip()
+    return ""
+
+
 
 def clean_kv(entry, keys):
     if not entry:
@@ -473,7 +550,7 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
     date_pattern = re.compile(r'\b(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[0-2])/\d{4}\b')
 
     # OCR and preprocessing
-    img = preprocess_image(image_path,(512,512))
+    img = preprocess_image_resize(image_path,(512,512))
     result = ocr.ocr(img, cls=True)[0]
     raw_texts = [line[1][0] for line in result]
     filtered_data = filter_caps_and_dates(raw_texts)
@@ -548,6 +625,85 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
             details["Place of Issue"] = filtered_data[date_index[0] + 2]
 
     return details
+def extract_driver_details(image_path):
+    DOB_PATTERN = r'(?:\d{2}[-/.](?:\d{2}|\w{3})[-/.]\d{2,4})'
+    image = preprocess_image_resize(image_path, (1024, 1024))
+    result = ocr.ocr(image, cls=True)[0]
+    lines = [line[1][0].strip() for line in result if line[1][0].strip()
+             and all(blacklist not in line[1][0].replace(" ", "").upper()
+                     for blacklist in ["DRIVINGLICENCE", "GOVERNMENT", "STATE"])]
+
+    account_number = extract_account_number(lines)
+    name = ""
+    doi = extract_date_near_keywords(result, ["Issue", "Doi", "ID"], ["Valid"])
+    dob = extract_date_near_keywords(result, ["DOB", "Date of Birth"])
+    valid = ""
+    relation = ""
+    address = ""
+    bg = ""
+
+    for i, line in enumerate(lines):
+        upper_line = line.upper()
+
+        if "NAME" in upper_line:
+            content = line.replace("Name", "").replace(":", "").strip()
+            if content == "":
+                name = lines[i + 1]
+                if len(name.split()) == 1:
+                    name = name + " " + lines[i + 2]
+            else:
+                name = content
+                if len(name.split()) == 1:
+                    name = name + " " + lines[i + 1]
+
+        if "VALID" in upper_line and any(x in upper_line.replace(" ", "") for x in ["NONTRANSPORT", "NON-TRANSPORT", "NT"]):
+            for j in range(i, len(lines)):
+                valid_match = re.search(DOB_PATTERN, lines[j])
+                if valid_match:
+                    valid = valid_match.group()
+                    break
+
+        if any(s in line.replace("/", "").replace("I", "") for s in ["SDW", "SWD", "Son", "Daughter", "Wife"]) or "/o" in line:
+            relation = line.replace("/", "").replace("SDW", '').replace("SWD", '').replace("SonDaughterWife", "").replace("of", "")
+            if len(relation) > 1:
+                relation = relation[relation.find(":") + 1:]
+            else:
+                relation = relation.replace(":", "")
+            if relation.strip() == "":
+                relation = lines[i + 1]
+
+        if "ADD" in upper_line:
+            address_lines = [line]
+            for j in range(i + 1, min(i + 4, len(lines))):
+                address_lines.append(lines[j].strip())
+            address = ', '.join(address_lines)
+
+        if any(bgtype in upper_line for bgtype in ["A+", "B+", "AB+", "O+", "A-", "B-", "AB-", "O-", "BG", "GROUP"]) and bg == "" and not contains_digit(line):
+            plus_idx = line.find('+')
+            minus_idx = line.find('-')
+            idx = plus_idx if plus_idx != -1 else minus_idx
+            if idx != -1:
+                if line[idx - 2:idx - 1] == "AB":
+                    bg = line[idx - 2:idx + 1].strip()
+                else:
+                    bg = line[idx - 1:idx + 1].strip()
+            else:
+                bg = line.replace("BG", "").replace("Group", "").replace("Blood", "").replace(":", "").strip()
+
+    if valid == "":
+        valid = extract_date_near_keywords(result, ["Valid"])
+
+    return {
+        "Account Number": account_number,
+        "Name": name,
+        "Date of Issue": doi,
+        "Date of Birth": dob,
+        "Valid for": valid,
+        "Relation": relation,
+        "Address": address,
+        "Blood Group": bg
+    }
+
 
 
 def save_upload_file_tmp(upload_file: UploadFile) -> str:
@@ -590,5 +746,7 @@ async def extract_kyc_document_data(image: UploadFile, document_name: str):
         return extract_passport_details(tmp_path)
     elif document_name == "VOTERID":
         return extract_voter_details(tmp_path)
+    elif document_name == "LICENCE":
+        return extract_driver_details(tmp_path)
     else:
         return {"error": f"Unsupported document type: {document_name}"}

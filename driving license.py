@@ -182,7 +182,6 @@ from paddleocr import PaddleOCR
 
 ocr = PaddleOCR(use_angle_cls=True, lang='en')
 
-DOB_PATTERN = r'(?:\d{2}[-/.](?:\d{2}|\w{3})[-/.]\d{2,4})'
 
 STATE_CODES = [
     'AN', 'AP', 'AR', 'AS', 'BR', 'CH', 'CG', 'DD', 'DL', 'DN', 'GA', 'GJ', 'HP',
@@ -211,6 +210,7 @@ def extract_date_near_keywords(
     max_vertical_gap=50,
     max_horizontal_gap=150
 ):
+    DOB_PATTERN = r'(?:\d{2}[-/.](?:\d{2}|\w{3})[-/.]\d{2,4})'
     exclude_if_contains = exclude_if_contains or []
     matched_date = None
 
@@ -276,6 +276,7 @@ def extract_account_number(lines):
 
 
 def extract_driver_details(image_path):
+    DOB_PATTERN = r'(?:\d{2}[-/.](?:\d{2}|\w{3})[-/.]\d{2,4})'
     image = preprocess_image_resize(image_path, (1024, 1024))
     result = ocr.ocr(image, cls=True)[0]
     lines = [line[1][0].strip() for line in result if line[1][0].strip()
