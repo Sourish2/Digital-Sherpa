@@ -9,44 +9,60 @@ import json
 from PIL import Image
 from passportgemini import api_key
 
-def gemini_fallback(image_path):
-    genai.configure(api_key=api_key)
-    # Load the image (your passport scan)
-    image = Image.open("WhatsApp Image 2025-06-12 at 10.55.29_7a30f009.jpg")
-    # Create a Gemini multimodal model
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    # Send image with prompt
-    response = model.generate_content(
-        ["""
-        Extract the following fields from this passport image and return them in a JSON dictionary format:
+def gemini_fallback(image_path,details):
+    try:
+        # Configure Gemini
+        genai.configure(api_key=api_key)
 
-        {
-          "Type": "",
-          "Country Code": "",
-          "Passport No.": "",
-          "Sex": "",
-          "Nationality": "",
-          "Date of Birth": "",
-          "Date of Issue": "",
-          "Date of Expiry": "",
-          "Place of Birth": "",
-          "Place of Issue": "",
-          "Given Name(s)": "",
-          "Address" : ""
-        }
+        # Load the image
+        image = Image.open(image_path)
 
-        Only return the dictionary without explanation.
-        """, image],
-        generation_config={"temperature": 0.2}
-    )
+        # Use correct model name (no trailing dot)
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
 
-    # Print raw text output
-    match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
+        # Prompt and image
+        response = model.generate_content(
+            ["""
+                Extract the following fields from this passport image and return them in a JSON dictionary format:
 
-    if match:
-        json_str = match.group(1)
-        data = json.loads(json_str)
-    return data
+                {
+                  "Type": "",
+                  "Country Code": "",
+                  "Passport No.": "",
+                  "Sex": "",
+                  "Nationality": "",
+                  "Date of Birth": "",
+                  "Date of Issue": "",
+                  "Date of Expiry": "",
+                  "Place of Birth": "",
+                  "Place of Issue": "",
+                  "Given Name(s)": "",
+                  "Address": ""
+                }
+
+                Only return the dictionary without explanation.
+                """, image],
+            generation_config={"temperature": 0.2}
+        )
+
+        # Extract the JSON dictionary using regex
+        match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            return data
+        else:
+            print("❌ JSON not found in Gemini response.")
+            return details
+
+    except genai.types.generation_types.StopCandidateException as e:
+        print(f"❌ Gemini stopped generation early: {e}")
+        return details
+    except json.JSONDecodeError as e:
+        print(f"❌ Failed to parse JSON from response: {e}")
+        return details
+    except Exception as e:
+        print(f"❌ Gemini API error: {e}")
+        return details
 
 
 # Initialize OCR engine
@@ -84,7 +100,7 @@ def resize_by_width(image, width=1024):
     new_height = int(width * aspect_ratio)
     return cv2.resize(image, (width, new_height))
 
-def preprocess_passport_image(image_path: str, target_size=None) -> np.ndarray:
+def preprocess_image(image_path: str, target_size=None) -> np.ndarray:
     """Loads and preprocesses the passport image.
     If the top 25% of the image has very little text, cuts the image in half vertically.
     """
@@ -331,9 +347,9 @@ def extract_passport_details(image_path: str) -> Dict[str, str]:
         raw_texts=filter_caps_and_dates(raw_texts)
         details.update(extract_back_page(raw_texts,result))
         flag=0
-        # for i in details.keys():
-        #     if details[i]=="":
-        #         details=gemini_fallback(image_path)
+        for i in details.keys():
+            if details[i]=="":
+                details=gemini_fallback(image_path,details)
     if("REPUBLIC" in full_text and flag==1):
         details=extract_front_page(raw_texts,result)
     if("EMIGRATION" in full_text and flag==1):

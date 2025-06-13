@@ -186,44 +186,61 @@ def normalize_bank(bank_name, ifsc_code):
     prefix = normalize_ifsc(ifsc_code)[:4] if ifsc_code else ""
     return BANK_CODE_MAP.get(prefix, None)
 
-def gemini_fallback(image_path):
-    genai.configure(api_key=api_key)
-    # Load the image (your passport scan)
-    image = Image.open("WhatsApp Image 2025-06-12 at 10.55.29_7a30f009.jpg")
-    # Create a Gemini multimodal model
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    # Send image with prompt
-    response = model.generate_content(
-        ["""
-        Extract the following fields from this passport image and return them in a JSON dictionary format:
+def gemini_fallback(image_path,details):
+    try:
+        # Configure Gemini
+        genai.configure(api_key=api_key)
 
-        {
-          "Type": "",
-          "Country Code": "",
-          "Passport No.": "",
-          "Sex": "",
-          "Nationality": "",
-          "Date of Birth": "",
-          "Date of Issue": "",
-          "Date of Expiry": "",
-          "Place of Birth": "",
-          "Place of Issue": "",
-          "Given Name(s)": "",
-          "Address" : ""
-        }
+        # Load the image
+        image = Image.open(image_path)
 
-        Only return the dictionary without explanation.
-        """, image],
-        generation_config={"temperature": 0.2}
-    )
+        # Use correct model name (no trailing dot)
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
 
-    # Print raw text output
-    match = re.search(r"```json\s*(\{.*?\})\s*```", response.text, re.DOTALL)
+        # Prompt and image
+        response = model.generate_content(
+            ["""
+                Extract the following fields from this passport image and return them in a JSON dictionary format:
 
-    if match:
-        json_str = match.group(1)
-        data = json.loads(json_str)
-    return data
+                {
+                  "Type": "",
+                  "Country Code": "",
+                  "Passport No.": "",
+                  "Sex": "",
+                  "Nationality": "",
+                  "Date of Birth": "",
+                  "Date of Issue": "",
+                  "Date of Expiry": "",
+                  "Place of Birth": "",
+                  "Place of Issue": "",
+                  "Given Name(s)": "",
+                  "Address": ""
+                }
+
+                Only return the dictionary without explanation.
+                """, image],
+            generation_config={"temperature": 0.2}
+        )
+
+        # Extract the JSON dictionary using regex
+        match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        if match:
+            data = json.loads(match.group(0))
+            return data
+        else:
+            print("❌ JSON not found in Gemini response.")
+            return details
+
+    except genai.types.generation_types.StopCandidateException as e:
+        print(f"❌ Gemini stopped generation early: {e}")
+        return details
+    except json.JSONDecodeError as e:
+        print(f"❌ Failed to parse JSON from response: {e}")
+        return details
+    except Exception as e:
+        print(f"❌ Gemini API error: {e}")
+        return details
+
 
 
 def filter_caps_and_dates(strings: List[str]) -> List[str]:
