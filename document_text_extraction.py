@@ -11,7 +11,7 @@ import itertools
 from typing import List, Optional, Dict
 from PIL import Image
 import json
-from passportgemini import api_key
+from geminikey import api_key
 import numpy as np
 
 
